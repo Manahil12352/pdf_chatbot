@@ -2,11 +2,10 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_groq import ChatGroq
-from langchain.chains import RetrievalQA
 
 load_dotenv()
 
@@ -37,16 +36,11 @@ if uploaded_file is not None:
 
         embeddings = get_embeddings()
         vectorstore = Chroma.from_documents(chunks, embeddings)
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
         llm = ChatGroq(
             groq_api_key=os.getenv("GROQ_API_KEY"),
             model_name="llama-3.1-8b-instant"
-        )
-
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=vectorstore.as_retriever(search_kwargs={"k": 3})
         )
 
     st.success(f"PDF processed! {len(chunks)} chunks created. Ask away.")
@@ -55,9 +49,29 @@ if uploaded_file is not None:
 
     if question:
         with st.spinner("Thinking..."):
-            answer = qa_chain.invoke({"query": question})
+            # Step 1: retrieve relevant chunks
+            relevant_docs = retriever.invoke(question)
+            context = "\n\n".join([doc.page_content for doc in relevant_docs])
+
+            # Step 2: build the prompt manually
+            prompt = f"""Answer the question based only on the following context. 
+If the answer isn't in the context, say you don't know.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+
+            # Step 3: call the LLM directly
+            response = llm.invoke(prompt)
+
             st.write("### Answer")
-            st.write(answer["result"])
+            st.write(response.content)
+
+            with st.expander("Show retrieved context"):
+                st.write(context)
 
     os.remove(temp_path)
 else:
